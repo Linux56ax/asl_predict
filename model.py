@@ -7,10 +7,8 @@ import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 
-# -------------------
-# CONFIG
-# -------------------
-DATA_DIR = "data/asl_alphabet_train"   # path to train folders (each folder is a class)
+#configuration
+DATA_DIR = "dataset/asl_alphabet_train"   # path to train folders (each folder is a class)
 IMAGE_SIZE = (224, 224)
 BATCH_SIZE = 64
 SEED = 1337
@@ -22,9 +20,7 @@ PATIENCE = 3
 MODEL_DIR = "models"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# -------------------
-# UTILS
-# -------------------
+#utils
 def get_label_names(data_dir):
     # alphabetical sorted class folder names
     classes = sorted([p.name for p in pathlib.Path(data_dir).iterdir() if p.is_dir()])
@@ -33,9 +29,7 @@ def get_label_names(data_dir):
 CLASS_NAMES = get_label_names(DATA_DIR)
 print("Classes:", CLASS_NAMES)
 
-# -------------------
-# BUILD tf.data
-# -------------------
+#tf.data building
 def decode_and_resize(filename, label):
     image = tf.io.read_file(filename)
     image = tf.image.decode_jpeg(image, channels=3)
@@ -43,7 +37,7 @@ def decode_and_resize(filename, label):
     image = tf.cast(image, tf.float32) / 255.0
     return image, label
 
-# data listing
+#data listing
 file_paths = []
 labels = []
 for i, cls in enumerate(CLASS_NAMES):
@@ -55,7 +49,7 @@ for i, cls in enumerate(CLASS_NAMES):
 file_paths = np.array(file_paths)
 labels = np.array(labels)
 
-# shuffle and split (80% train, 10% val, 10% test)
+#shuffle and split (80% train, 10% val, 10% test)
 rng = np.random.RandomState(SEED)
 perm = rng.permutation(len(file_paths))
 file_paths = file_paths[perm]
@@ -78,9 +72,7 @@ def make_dataset(files, labels, training=False):
     ds = ds.batch(BATCH_SIZE).prefetch(AUTOTUNE)
     return ds
 
-# -------------------
-# AUGMENTATION
-# -------------------
+#augementation
 data_augment = tf.keras.Sequential([
     tf.keras.layers.RandomFlip("horizontal"),
     tf.keras.layers.RandomRotation(0.08),
@@ -92,9 +84,7 @@ train_ds = make_dataset(train_files, train_labels, training=True)
 val_ds = make_dataset(val_files, val_labels, training=False)
 test_ds = make_dataset(test_files, test_labels, training=False)
 
-# -------------------
-# MODEL: transfer learning with EfficientNetV2B0
-# -------------------
+#transfer learning with EfficientNetV2B0
 base_model = tf.keras.applications.EfficientNetV2B0(
     include_top=False, input_shape=(*IMAGE_SIZE,3), weights="imagenet"
 )
@@ -113,16 +103,14 @@ outputs = tf.keras.layers.Dense(len(CLASS_NAMES), activation="softmax")(x)
 model = tf.keras.Model(inputs, outputs)
 model.summary()
 
-# compile for head training
+#compile for head training
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
     loss="sparse_categorical_crossentropy",
     metrics=["accuracy"]
 )
 
-# -------------------
-# CALLBACKS
-# -------------------
+#callbacks
 callbacks = [
     tf.keras.callbacks.ModelCheckpoint(os.path.join(MODEL_DIR, "best_head.h5"),
                                        save_best_only=True, monitor="val_accuracy", mode="max"),
@@ -130,14 +118,10 @@ callbacks = [
     tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=PATIENCE, restore_best_weights=True)
 ]
 
-# -------------------
-# TRAIN HEAD
-# -------------------
+#train head
 history_head = model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS_HEAD, callbacks=callbacks)
 
-# -------------------
-# FINE-TUNE: unfreeze top layers of base_model
-# -------------------
+#tuning
 base_model.trainable = True
 # freeze lower layers and unfreeze last N layers (tune N)
 N_UNFREEZE = 40
@@ -146,7 +130,7 @@ for i, layer in enumerate(base_model.layers[:-N_UNFREEZE]):
 for layer in base_model.layers[-N_UNFREEZE:]:
     layer.trainable = True
 
-# lower LR for fine-tuning
+#lower LR for fine-tuning
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
     loss="sparse_categorical_crossentropy",
@@ -162,9 +146,7 @@ callbacks_fine = [
 
 history_ft = model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS_FINETUNE, callbacks=callbacks_fine)
 
-# -------------------
-# EVALUATION on test set
-# -------------------
+#evaluate on test set
 model.save(os.path.join(MODEL_DIR, "final_model_saved"))
 test_loss, test_acc = model.evaluate(test_ds)
 print("Test accuracy:", test_acc)
@@ -173,7 +155,7 @@ print("Test accuracy:", test_acc)
 y_pred_probs = model.predict(test_ds)
 y_pred = np.argmax(y_pred_probs, axis=1)
 
-# build true labels in same order as test_ds batches
+#build true labels in same order as test_ds batches
 y_true = np.concatenate([y for x,y in test_ds], axis=0)
 
 print(classification_report(y_true, y_pred, target_names=CLASS_NAMES))
@@ -182,7 +164,7 @@ print(classification_report(y_true, y_pred, target_names=CLASS_NAMES))
 cm = confusion_matrix(y_true, y_pred)
 np.save(os.path.join(MODEL_DIR, "confusion_matrix.npy"), cm)
 
-# minimal plot of loss/acc
+#minimal plot of loss/acc
 def plot_hist(h, title):
     plt.figure(figsize=(8,4))
     plt.plot(h.history.get("loss", []), label="loss")
@@ -193,7 +175,7 @@ plot_hist(history_head, "head training")
 plot_hist(history_ft, "finetune training")
 plt.show()
 
-# Save mapping
+#save mapping
 import json
 with open(os.path.join(MODEL_DIR, "class_names.json"), "w") as f:
     json.dump(CLASS_NAMES, f)
